@@ -1,0 +1,17 @@
+# Fichiers et dossiers de l'environnement de développement
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Dossier de données - Ne doit pas être dans l'image !
+data/
+
+# Fichiers Git
+.git/
+.gitignore
+
+# Fichiers Docker
+.dockerignore
+Dockerfile
+docker-compose.yml

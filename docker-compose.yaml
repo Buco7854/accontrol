@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  accontrol:
+    image: buco7854/accontrol:latest
+
+    container_name: ac-control-dashboard
+
+    ports:
+      - "5000:5000"
+
+    volumes:
+      - ./data:/app/data
+
+    restart: unless-stopped

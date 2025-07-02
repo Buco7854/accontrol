@@ -1,0 +1,71 @@
+##################################################################
+# Fichier .gitignore pour une application Python/Flask + Docker  #
+##################################################################
+
+# --- Base de Données ---
+# C'est la règle la plus importante pour votre projet.
+# On ignore le dossier qui contient la base de données.
+data/
+
+# --- Environnements virtuels Python ---
+# Ne jamais commiter votre environnement virtuel !
+.venv/
+venv/
+env/
+
+# --- Fichiers de cache et de bytecode Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- Fichiers de dépendances et de build Python ---
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+dist/
+build/
+wheels/
+*.tar.gz
+*.whl
+
+# --- Fichiers de configuration des éditeurs et IDE ---
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# --- Fichiers générés par le système d'exploitation ---
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Fichiers de log ---
+# Ne jamais commiter les logs
+*.log
+logs/
+
+# --- Fichiers de configuration locale ---
+# Utile si vous ajoutez un jour des secrets (clés API, etc.)
+.env
+.env.*
+!.env.example
+
+# --- Couverture de code et rapports de test ---
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.tox/

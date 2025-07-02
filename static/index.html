@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="fr" data-theme="system">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Climatisation</title>
+    <link href="/static/fonts/nunito.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/fa/css/all.min.css">
+
+    <style>
+        :root{--bg-color:#f8f9fa;--sidebar-bg:#ffffff;--accent-color:#0d6efd;--accent-color-light:#e7f0ff;--text-color:#212529;--text-muted:#6c757d;--border-color:#dee2e6;--border-radius:8px;--shadow:0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);--sidebar-width-expanded:280px;--sidebar-width-collapsed:80px;--transition-speed:0.3s}
+        html[data-theme='dark']{--bg-color:#121212;--sidebar-bg:#1e1e1e;--accent-color:#3b82f6;--accent-color-light:rgba(59, 130, 246, 0.15);--text-color:#e5e7eb;--text-muted:#9ca3af;--border-color:#374151;--shadow:none;}
+        @media (prefers-color-scheme: dark){html[data-theme='system']{--bg-color:#121212;--sidebar-bg:#1e1e1e;--accent-color:#3b82f6;--accent-color-light:rgba(59, 130, 246, 0.15);--text-color:#e5e7eb;--text-muted:#9ca3af;--border-color:#374151;--shadow:none;}}
+        *{margin:0;padding:0;box-sizing:border-box}
+        html,body{height:100%;font-family:'Nunito',sans-serif;transition:background-color var(--transition-speed), color var(--transition-speed);background-color:var(--bg-color);color:var(--text-color);overflow-x:hidden}
+        #dashboard{display:flex;flex-direction:column;height:100vh}
+        .sidebar{position:fixed;top:0;left:0;height:100%;width:var(--sidebar-width-expanded);display:flex;flex-direction:column;background-color:var(--sidebar-bg);z-index:1000;transform:translateX(-100%);transition:transform var(--transition-speed) ease, width var(--transition-speed) ease;}
+        .sidebar.is-open{transform:translateX(0);}
+        .sidebar-overlay{position:fixed;inset:0;background-color:rgba(0,0,0,0.5);z-index:999;opacity:0;visibility:hidden;transition:opacity var(--transition-speed) ease, visibility var(--transition-speed) ease;}
+        .sidebar-overlay.is-active{opacity:1;visibility:visible;}
+        .sidebar-header{padding:1.5rem;display:flex;align-items:center;justify-content:space-between;gap:0.75rem;}
+        .sidebar-title {display:flex;align-items:center;gap:0.75rem;font-size:1.5rem;font-weight:700;color:var(--accent-color);white-space:nowrap;text-decoration:none;cursor:pointer;}
+        #close-sidebar-btn {background:none;border:none;font-size:1.5rem;color:var(--text-muted);cursor:pointer;padding:0.5rem;}
+
+        .split-list{list-style:none;overflow-y:auto;flex-grow:1;padding:0 1.5rem; opacity: 0; transition: opacity 0.4s ease-in-out; overflow-x: hidden;}
+        .split-list.is-loaded { opacity: 1; }
+
+        .split-list li{display:flex;align-items:center;gap:1rem;padding:0.8rem 1rem;margin-bottom:0.5rem;cursor:pointer;font-weight:600;color:var(--text-muted);border-left:3px solid transparent;border-radius:var(--border-radius);transition: all .2s ease-in-out;}
+        .split-list li:hover{background-color:var(--accent-color-light);}
+        .split-list li.active{background-color:var(--accent-color-light);color:var(--accent-color);font-weight:700;border-left:3px solid var(--accent-color)}
+        .sidebar-footer{padding:1.5rem;border-top:1px solid var(--border-color);display:flex;justify-content:space-between;align-items:center}
+        .theme-switcher{display:flex;background-color:var(--bg-color);padding:4px;border-radius:var(--border-radius)}
+        .theme-btn{display:inline-flex;align-items:center;justify-content:center;background:none;border:none;font-size:1rem;color:var(--text-muted);padding:0.25rem 0.6rem;cursor:pointer;border-radius:6px;text-decoration:none;transition:color 0.2s, background-color 0.2s}
+        .theme-btn.active{background-color:var(--accent-color-light);color:var(--accent-color)}
+        .footer-actions {display:flex;align-items:center;gap:0.5rem;}
+        #collapse-btn{display:none;}
+        .mobile-header-bar{display:flex;align-items:center;padding:1rem;gap:1rem;background-color:var(--sidebar-bg);box-shadow:var(--shadow);position:sticky;top:0;z-index:900;border-bottom: 1px solid var(--border-color);transition: border-color var(--transition-speed);}
+        #hamburger-btn{font-size:1.5rem;background:none;border:none;color:var(--text-muted);cursor:pointer;}
+        .mobile-header-bar h1{font-size:1.2rem;}
+        .main-content{flex-grow:1;display:flex;flex-direction:column;overflow-y:auto;padding:0;}
+        #welcome-message, #mobile-split-view {padding:1rem;}
+        #welcome-message{display:flex;flex-direction:column;align-items:center;justify-content:center;flex-grow:1;text-align:center}
+        #welcome-message .icon{font-size:5rem;color:var(--border-color);margin-bottom:1rem;}
+        #welcome-message h2{font-size:1.75rem;color:var(--text-muted);}
+        #mobile-split-view {padding-top:2rem;padding-bottom:2rem;text-align:center;}
+        .mobile-split-card{background:var(--sidebar-bg);padding:2.5rem;border-radius:var(--border-radius);box-shadow:var(--shadow);}
+        .mobile-split-card h2{margin-bottom:2rem;}
+        .mobile-split-card .control-btn{display:inline-block;padding:1rem 2rem;background-color:var(--accent-color);color:white;text-decoration:none;border-radius:var(--border-radius);font-weight:700;}
+        #iframe-container{display:none;}
+        #management-view{color:var(--text-color);padding:1rem;}
+        #management-view h2{ font-size:1.8rem; padding-bottom:1rem; border-bottom:none; }
+        #management-view h3{ margin-bottom:1.5rem; color:var(--text-muted); }
+        #split-form{ background-color:var(--sidebar-bg); padding:1.5rem; border-radius:var(--border-radius); box-shadow:var(--shadow); margin-top:2rem; }
+        #list-container { margin-top: 2.5rem; }
+        #list-container h3{ margin-top:0; margin-bottom: 1rem; }
+        .form-group{margin-bottom:1rem}.form-group label{display:block;font-weight:600;margin-bottom:0.5rem}.form-group input{width:100%;padding:0.75rem;border:1px solid var(--border-color);border-radius:var(--border-radius);background-color:var(--bg-color);color:var(--text-color);font-size:1rem}.form-actions{margin-top:1.5rem;display:flex;gap:1rem}.form-actions button{padding:0.75rem 1.5rem;border:none;border-radius:var(--border-radius);font-weight:600;cursor:pointer}.form-actions button[type="submit"]{background-color:var(--accent-color);color:white}.form-actions button[type="button"]{background-color:var(--text-muted);color:white}
+        #list-container ul{list-style:none;padding:0}#list-container li{background-color:var(--sidebar-bg);padding:1rem 1.5rem;border-radius:var(--border-radius);margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;box-shadow:var(--shadow)}.split-info{display:flex;flex-direction:column}.split-info span{color:var(--text-muted);font-size:0.9rem}.split-actions button{background:none;border:none;color:var(--text-muted);font-size:1.1rem;cursor:pointer;padding:0.5rem;margin-left:0.5rem}.split-actions button:hover{color:var(--accent-color)}
+        .split-list::-webkit-scrollbar { width: 8px; }.split-list::-webkit-scrollbar-track { background: transparent; }.split-list::-webkit-scrollbar-thumb { background-color: var(--text-color); opacity: 0.2; border-radius: 10px; border: 2px solid var(--sidebar-bg); }.split-list::-webkit-scrollbar-thumb:hover { opacity: 0.4; }
+
+        @media (min-width: 769px){
+            #dashboard{flex-direction:row;}
+            .mobile-header-bar{display:none;}
+            .sidebar{position:relative;transform:translateX(0);flex-shrink:0;}
+            #close-sidebar-btn {display:none;}
+            .sidebar-header {justify-content:flex-start;}
+            .main-content {padding:2rem;}
+            #welcome-message, #mobile-split-view, #management-view {padding:0;}
+            #iframe-container{display:flex;flex-grow:1;border:1px solid var(--border-color);border-radius:var(--border-radius);box-shadow:var(--shadow);overflow:hidden;}
+            #split-iframe{width:100%;height:100%;border:none;background-color:var(--sidebar-bg);}
+            #collapse-btn{display:inline-flex;}
+            #dashboard.collapsed .sidebar{width:var(--sidebar-width-collapsed);}
+
+            #dashboard.collapsed .sidebar-header span, #dashboard.collapsed .split-list li span, #dashboard.collapsed .theme-switcher, #dashboard.collapsed #manage-btn {display:none;}
+
+            #dashboard.collapsed .footer-actions {justify-content:center;width:100%;}
+            #dashboard.collapsed .sidebar-header,#dashboard.collapsed .split-list li{justify-content:center;padding-left:0;padding-right:0}
+            #dashboard.collapsed .sidebar-footer{justify-content:center}
+
+            /* CORRECTION 2 : On ajoute la transition à l'icône de la flèche */
+            #collapse-btn .fa-solid { transition: transform var(--transition-speed) ease; }
+            #dashboard.collapsed #collapse-btn .fa-solid { transform: rotate(180deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="dashboard">
+        <div class="sidebar-overlay" id="sidebar-overlay"></div>
+        <aside class="sidebar">
+            <div class="sidebar-header"><a href="/" id="home-link" class="sidebar-title"><i class="fa-solid fa-wind"></i><span>AC Control</span></a><button id="close-sidebar-btn" title="Fermer le menu"><i class="fa-solid fa-times"></i></button></div>
+            <ul class="split-list" id="split-list-sidebar"></ul>
+            <div class="sidebar-footer">
+                <div class="theme-switcher"><button class="theme-btn" data-theme="light" title="Thème clair"><i class="fa-solid fa-sun"></i></button><button class="theme-btn" data-theme="dark" title="Thème sombre"><i class="fa-solid fa-moon"></i></button><button class="theme-btn" data-theme="system" title="Thème du système"><i class="fa-solid fa-desktop"></i></button></div>
+                <div class="footer-actions"><a href="/manage" id="manage-btn" class="theme-btn" title="Gérer les splits"><i class="fa-solid fa-gear"></i></a><button id="collapse-btn" class="theme-btn" title="Réduire"><i class="fa-solid fa-chevron-left"></i></button></div>
+            </div>
+        </aside>
+        <main class="main-content">
+            <div class="mobile-header-bar"><button id="hamburger-btn" title="Menu"><i class="fa-solid fa-bars"></i></button><h1 id="mobile-page-title">Dashboard</h1></div>
+            <div id="welcome-message"><div class="icon"><i class="fa-regular fa-snowflake"></i></div><h2>Sélectionnez un climatiseur pour commencer.</h2></div>
+            <div id="iframe-container"></div>
+            <div id="mobile-split-view" style="display: none;"></div>
+            <div id="management-view" style="display: none;"></div>
+        </main>
+    </div>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
