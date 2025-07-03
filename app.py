@@ -1,14 +1,19 @@
 import os
 import sys
-
-import httpx
-import aiosqlite
+import asyncio
+from contextlib import asynccontextmanager
 from urllib.parse import urljoin, urlparse
-from dotenv import load_dotenv
 
-# NEW: Import StreamingResponse along with other response types
-from fastapi import FastAPI, Request, HTTPException, Depends
-from fastapi.responses import StreamingResponse, Response  # Add StreamingResponse here
+import aiosqlite
+import httpx
+import uvicorn
+import websockets
+from dotenv import load_dotenv
+from fastapi import (
+    FastAPI, Request, HTTPException, Depends,
+    WebSocket, WebSocketDisconnect
+)
+from fastapi.responses import StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -16,14 +21,29 @@ from pydantic import BaseModel, Field
 # --- Configuration (Unchanged) ---
 load_dotenv()
 BASE_DOMAIN = os.getenv('BASE_DOMAIN', 'localhost:8000')
+# Ensure data directory exists
+os.makedirs("data", exist_ok=True)
 DATABASE = os.path.join('data', 'database.db')
 
-# --- FastAPI App Initialization (Unchanged) ---
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("Lifespan: Startup")
+    timeout = httpx.Timeout(10.0, read=None) # Increased connect timeout
+    app.state.httpx_client = httpx.AsyncClient(timeout=timeout)
+    # You might also want to initialize your DB schema here on first run
+    yield
+    print("Lifespan: Shutdown")
+    await app.state.httpx_client.aclose()
+
+app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# --- Pydantic Data Models (Unchanged) ---
+def get_httpx_client(request: Request) -> httpx.AsyncClient:
+    return request.app.state.httpx_client
+
+
 class SplitBase(BaseModel):
     name: str = Field(..., description="The unique subdomain name for the proxy.")
     label: str = Field(..., description="A user-friendly display label.")
@@ -32,7 +52,6 @@ class SplitBase(BaseModel):
 class SplitInDB(SplitBase):
     id: int
 
-# --- Database & HTTPX Client Dependencies (Unchanged) ---
 async def get_db():
     db = await aiosqlite.connect(DATABASE)
     db.row_factory = aiosqlite.Row
@@ -41,22 +60,14 @@ async def get_db():
     finally:
         await db.close()
 
-_httpx_client = None
+async def get_split_target_url(split_name: str) -> str | None:
+    async with aiosqlite.connect(DATABASE) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute('SELECT url FROM splits WHERE name = ?', (split_name,))
+        split = await cursor.fetchone()
+    return split['url'] if split else None
 
-@app.on_event("startup")
-async def startup_event():
-    global _httpx_client
-    timeout = httpx.Timeout(5.0, read=None)
-    _httpx_client = httpx.AsyncClient(timeout=timeout)
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    await _httpx_client.aclose()
-
-def get_httpx_client():
-    return _httpx_client
-
-# --- API Routes (Unchanged and Correct) ---
 @app.get("/api/splits", response_model=list[SplitInDB])
 async def get_splits(db: aiosqlite.Connection = Depends(get_db)):
     cursor = await db.execute('SELECT id, name, label, url FROM splits ORDER BY label')
@@ -73,11 +84,73 @@ async def add_split(split: SplitBase, db: aiosqlite.Connection = Depends(get_db)
     except aiosqlite.IntegrityError:
         raise HTTPException(status_code=409, detail="A split with this name already exists.")
 
+
+@app.websocket("/{path:path}")
+async def websocket_proxy(websocket: WebSocket, path: str):
+    host = websocket.headers.get("host", "").split(':')[0]
+    base_domain_name = BASE_DOMAIN.split(':')[0]
+
+    if not host.endswith(f".{base_domain_name}"):
+        await websocket.close(code=1008, reason="Invalid host for WebSocket proxy.")
+        return
+
+    split_name = host.removesuffix(f".{base_domain_name}")
+    target_base_url = await get_split_target_url(split_name)
+
+    if not target_base_url:
+        await websocket.close(code=4004, reason=f"Subdomain proxy '{split_name}' not found.")
+        return
+
+    target_ws_url = urljoin(target_base_url, path).replace("http", "ws", 1)
+    if websocket.url.query:
+        target_ws_url += "?" + websocket.url.query
+
+    await websocket.accept(subprotocol=websocket.scope.get('subprotocols', [None])[0])
+
+    try:
+        async with websockets.connect(target_ws_url, subprotocols=websocket.scope.get("subprotocols", [])) as upstream_ws:
+            # This is the core of the proxy: two concurrent tasks to forward messages
+            async def forward_client_to_upstream():
+                while True:
+                    data = await websocket.receive()
+                    # `receive` raises WebSocketDisconnect, which is caught below
+                    if "bytes" in data:
+                        await upstream_ws.send(data["bytes"])
+                    elif "text" in data:
+                        await upstream_ws.send(data["text"])
+
+            async def forward_upstream_to_client():
+                while True:
+                    message = await upstream_ws.recv()
+                    # `recv` raises ConnectionClosedError, which is caught below
+                    if isinstance(message, bytes):
+                        await websocket.send_bytes(message)
+                    elif isinstance(message, str):
+                        await websocket.send_text(message)
+
+            # Run both forwarding tasks concurrently until one of them fails
+            await asyncio.gather(
+                forward_client_to_upstream(),
+                forward_upstream_to_client()
+            )
+
+    except (WebSocketDisconnect, websockets.exceptions.ConnectionClosedError, websockets.exceptions.ConnectionClosedOK):
+        print(f"Connection closed for WebSocket proxy to '{split_name}'.")
+    except Exception as e:
+        print(f"An unexpected error occurred in WebSocket proxy for '{split_name}': {e}")
+        await websocket.close(code=1011)
+
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
-async def router_and_proxy(request: Request, path: str):
+async def router_and_proxy(
+    request: Request,
+    path: str,
+    client: httpx.AsyncClient = Depends(get_httpx_client)
+):
     host = request.headers.get("host", "").split(':')[0]
     base_domain_name = BASE_DOMAIN.split(':')[0]
 
+    # Serve the main page for the base domain
     if host == base_domain_name:
         return templates.TemplateResponse(
             "index.html",
@@ -86,35 +159,26 @@ async def router_and_proxy(request: Request, path: str):
 
     if host.endswith(f".{base_domain_name}"):
         split_name = host.removesuffix(f".{base_domain_name}")
+        target_base_url = await get_split_target_url(split_name)
 
-        async with aiosqlite.connect(DATABASE) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute('SELECT url FROM splits WHERE name = ?', (split_name,))
-            split = await cursor.fetchone()
-
-        if not split:
+        if not target_base_url:
             raise HTTPException(status_code=404, detail=f"Subdomain proxy '{split_name}' not found.")
 
-        target_url = urljoin(split['url'], path)
+        target_url = urljoin(target_base_url, path)
         if request.url.query:
             target_url += "?" + request.url.query
 
-        client = get_httpx_client()
-
-        #--- THE FIX IS HERE ---
-        # Explicitly remove the 'connection' header to prevent the upstream
-        # connection from being prematurely closed.
-        excluded_incoming_headers = {'host', 'connection'}
-        req_headers = {
-            key: value for key, value in request.headers.items()
-            if key.lower() not in excluded_incoming_headers
+        # We cleanly forward most headers, letting httpx handle host and content-length.
+        headers_to_forward = {
+            k: v for k, v in request.headers.items() if k.lower() not in ['host']
         }
-        req_headers['host'] = urlparse(target_url).netloc
+        # Set the host header to match the target URL for services that require it
+        headers_to_forward['host'] = urlparse(target_base_url).netloc
 
         req = client.build_request(
             method=request.method,
             url=target_url,
-            headers=req_headers,
+            headers=headers_to_forward,
             cookies=request.cookies,
             content=request.stream()
         )
@@ -122,18 +186,30 @@ async def router_and_proxy(request: Request, path: str):
         try:
             resp = await client.send(req, stream=True)
 
-            async def stream_generator():
-                async for chunk in resp.aiter_raw():
-                    yield chunk
-
-            response_headers = [(name, value) for (name, value) in resp.headers.items() if name.lower() not in ('transfer-encoding', 'connection', 'content-length', 'content-encoding')]
+            # These headers are managed by the proxy server (Uvicorn) and should not be passed through.
+            excluded_response_headers = {
+                'content-encoding',
+                'content-length',
+                'transfer-encoding',
+                'connection'
+            }
+            response_headers = {
+                k: v for k, v in resp.headers.items() if k.lower() not in excluded_response_headers
+            }
 
             return StreamingResponse(
-                content=stream_generator(),
+                resp.aiter_raw(),
                 status_code=resp.status_code,
-                headers=dict(response_headers)
+                headers=response_headers,
+                media_type=resp.headers.get('content-type')
             )
+        except httpx.ConnectError:
+            raise HTTPException(status_code=502, detail=f"Bad Gateway: Could not connect to '{split_name}'.")
         except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"Proxy error for {target_url}: {e}")
+            raise HTTPException(status_code=500, detail=f"Proxy error for {target_url}: {e}")
 
     raise HTTPException(status_code=400, detail="Invalid host")
+
+if __name__ == "__main__":
+
+    print(f"Access at http://{BASE_DOMAIN} or subdomains.")

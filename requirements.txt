@@ -1,9 +1,8 @@
-python-dotenv
-requests
-httpx
-aiosqlite
 fastapi
+uvicorn[standard]
+aiosqlite
+httpx
 pydantic
-uvicorn
+python-dotenv
 gunicorn
-jinja2
+websockets
