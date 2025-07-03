@@ -73,7 +73,7 @@ async def add_split(split: SplitBase, db: aiosqlite.Connection = Depends(get_db)
     except aiosqlite.IntegrityError:
         raise HTTPException(status_code=409, detail="A split with this name already exists.")
 
-@app.api_route("/{path:path}")
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def router_and_proxy(request: Request, path: str):
     host = request.headers.get("host", "").split(':')[0]
     base_domain_name = BASE_DOMAIN.split(':')[0]
