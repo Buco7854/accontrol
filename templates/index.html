@@ -4,8 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard Climatisation</title>
-    <link href="/static/fonts/nunito.css" rel="stylesheet">
-    <link rel="stylesheet" href="/static/fa/css/all.min.css">
+
+    <!-- Injection de la variable d'environnement -->
+    <script>
+      window.SPLIT_BASE_DOMAIN = JSON.parse('{{ base_domain | tojson | safe }}');
+    </script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.2.0/css/all.min.css">
 
     <style>
         :root{--bg-color:#f8f9fa;--sidebar-bg:#ffffff;--accent-color:#0d6efd;--accent-color-light:#e7f0ff;--text-color:#212529;--text-muted:#6c757d;--border-color:#dee2e6;--border-radius:8px;--shadow:0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);--sidebar-width-expanded:280px;--sidebar-width-collapsed:80px;--transition-speed:0.3s}
@@ -21,10 +29,8 @@
         .sidebar-header{padding:1.5rem;display:flex;align-items:center;justify-content:space-between;gap:0.75rem;}
         .sidebar-title {display:flex;align-items:center;gap:0.75rem;font-size:1.5rem;font-weight:700;color:var(--accent-color);white-space:nowrap;text-decoration:none;cursor:pointer;}
         #close-sidebar-btn {background:none;border:none;font-size:1.5rem;color:var(--text-muted);cursor:pointer;padding:0.5rem;}
-
         .split-list{list-style:none;overflow-y:auto;flex-grow:1;padding:0 1.5rem; opacity: 0; transition: opacity 0.4s ease-in-out; overflow-x: hidden;}
         .split-list.is-loaded { opacity: 1; }
-
         .split-list li{display:flex;align-items:center;gap:1rem;padding:0.8rem 1rem;margin-bottom:0.5rem;cursor:pointer;font-weight:600;color:var(--text-muted);border-left:3px solid transparent;border-radius:var(--border-radius);transition: all .2s ease-in-out;}
         .split-list li:hover{background-color:var(--accent-color-light);}
         .split-list li.active{background-color:var(--accent-color-light);color:var(--accent-color);font-weight:700;border-left:3px solid var(--accent-color)}
@@ -34,6 +40,7 @@
         .theme-btn.active{background-color:var(--accent-color-light);color:var(--accent-color)}
         .footer-actions {display:flex;align-items:center;gap:0.5rem;}
         #collapse-btn{display:none;}
+        #collapse-btn .fa-solid { transition: transform var(--transition-speed) ease; }
         .mobile-header-bar{display:flex;align-items:center;padding:1rem;gap:1rem;background-color:var(--sidebar-bg);box-shadow:var(--shadow);position:sticky;top:0;z-index:900;border-bottom: 1px solid var(--border-color);transition: border-color var(--transition-speed);}
         #hamburger-btn{font-size:1.5rem;background:none;border:none;color:var(--text-muted);cursor:pointer;}
         .mobile-header-bar h1{font-size:1.2rem;}
@@ -56,7 +63,6 @@
         .form-group{margin-bottom:1rem}.form-group label{display:block;font-weight:600;margin-bottom:0.5rem}.form-group input{width:100%;padding:0.75rem;border:1px solid var(--border-color);border-radius:var(--border-radius);background-color:var(--bg-color);color:var(--text-color);font-size:1rem}.form-actions{margin-top:1.5rem;display:flex;gap:1rem}.form-actions button{padding:0.75rem 1.5rem;border:none;border-radius:var(--border-radius);font-weight:600;cursor:pointer}.form-actions button[type="submit"]{background-color:var(--accent-color);color:white}.form-actions button[type="button"]{background-color:var(--text-muted);color:white}
         #list-container ul{list-style:none;padding:0}#list-container li{background-color:var(--sidebar-bg);padding:1rem 1.5rem;border-radius:var(--border-radius);margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;box-shadow:var(--shadow)}.split-info{display:flex;flex-direction:column}.split-info span{color:var(--text-muted);font-size:0.9rem}.split-actions button{background:none;border:none;color:var(--text-muted);font-size:1.1rem;cursor:pointer;padding:0.5rem;margin-left:0.5rem}.split-actions button:hover{color:var(--accent-color)}
         .split-list::-webkit-scrollbar { width: 8px; }.split-list::-webkit-scrollbar-track { background: transparent; }.split-list::-webkit-scrollbar-thumb { background-color: var(--text-color); opacity: 0.2; border-radius: 10px; border: 2px solid var(--sidebar-bg); }.split-list::-webkit-scrollbar-thumb:hover { opacity: 0.4; }
-
         @media (min-width: 769px){
             #dashboard{flex-direction:row;}
             .mobile-header-bar{display:none;}
@@ -69,15 +75,10 @@
             #split-iframe{width:100%;height:100%;border:none;background-color:var(--sidebar-bg);}
             #collapse-btn{display:inline-flex;}
             #dashboard.collapsed .sidebar{width:var(--sidebar-width-collapsed);}
-
             #dashboard.collapsed .sidebar-header span, #dashboard.collapsed .split-list li span, #dashboard.collapsed .theme-switcher, #dashboard.collapsed #manage-btn {display:none;}
-
             #dashboard.collapsed .footer-actions {justify-content:center;width:100%;}
             #dashboard.collapsed .sidebar-header,#dashboard.collapsed .split-list li{justify-content:center;padding-left:0;padding-right:0}
             #dashboard.collapsed .sidebar-footer{justify-content:center}
-
-            /* CORRECTION 2 : On ajoute la transition à l'icône de la flèche */
-            #collapse-btn .fa-solid { transition: transform var(--transition-speed) ease; }
             #dashboard.collapsed #collapse-btn .fa-solid { transform: rotate(180deg); }
         }
     </style>
