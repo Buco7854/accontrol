@@ -1,12 +1,10 @@
 import os
-import sys
 import asyncio
 from contextlib import asynccontextmanager
 from urllib.parse import urljoin, urlparse
 
 import aiosqlite
 import httpx
-import uvicorn
 import websockets
 from dotenv import load_dotenv
 from fastapi import (
@@ -18,20 +16,26 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-# --- Configuration (Unchanged) ---
 load_dotenv()
 BASE_DOMAIN = os.getenv('BASE_DOMAIN', 'localhost:8000')
-# Ensure data directory exists
 os.makedirs("data", exist_ok=True)
 DATABASE = os.path.join('data', 'database.db')
+ALLOWED_HEADERS = {
+    "accept",
+    "accept-encoding",
+    "accept-language",
+    "cache-control",
+    "pragma",
+    "upgrade-insecure-requests",
+    "user-agent",
+}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Lifespan: Startup")
-    timeout = httpx.Timeout(10.0, read=None) # Increased connect timeout
+    timeout = httpx.Timeout(10.0, read=None)
     app.state.httpx_client = httpx.AsyncClient(timeout=timeout)
-    # You might also want to initialize your DB schema here on first run
     yield
     print("Lifespan: Shutdown")
     await app.state.httpx_client.aclose()
@@ -109,11 +113,9 @@ async def websocket_proxy(websocket: WebSocket, path: str):
 
     try:
         async with websockets.connect(target_ws_url, subprotocols=websocket.scope.get("subprotocols", [])) as upstream_ws:
-            # This is the core of the proxy: two concurrent tasks to forward messages
             async def forward_client_to_upstream():
                 while True:
                     data = await websocket.receive()
-                    # `receive` raises WebSocketDisconnect, which is caught below
                     if "bytes" in data:
                         await upstream_ws.send(data["bytes"])
                     elif "text" in data:
@@ -122,13 +124,11 @@ async def websocket_proxy(websocket: WebSocket, path: str):
             async def forward_upstream_to_client():
                 while True:
                     message = await upstream_ws.recv()
-                    # `recv` raises ConnectionClosedError, which is caught below
                     if isinstance(message, bytes):
                         await websocket.send_bytes(message)
                     elif isinstance(message, str):
                         await websocket.send_text(message)
 
-            # Run both forwarding tasks concurrently until one of them fails
             await asyncio.gather(
                 forward_client_to_upstream(),
                 forward_upstream_to_client()
@@ -150,7 +150,6 @@ async def router_and_proxy(
     host = request.headers.get("host", "").split(':')[0]
     base_domain_name = BASE_DOMAIN.split(':')[0]
 
-    # Serve the main page for the base domain
     if host == base_domain_name:
         return templates.TemplateResponse(
             "index.html",
@@ -168,30 +167,28 @@ async def router_and_proxy(
         if request.url.query:
             target_url += "?" + request.url.query
 
-        # We cleanly forward most headers, letting httpx handle host and content-length.
         headers_to_forward = {
-            k: v for k, v in request.headers.items() if k.lower() not in ['host']
+            k: v for k, v in request.headers.items()
+            if k.lower() in ALLOWED_HEADERS
         }
-        # Set the host header to match the target URL for services that require it
+
         headers_to_forward['host'] = urlparse(target_base_url).netloc
 
         req = client.build_request(
             method=request.method,
             url=target_url,
             headers=headers_to_forward,
-            cookies=request.cookies,
             content=request.stream()
         )
 
         try:
             resp = await client.send(req, stream=True)
 
-            # These headers are managed by the proxy server (Uvicorn) and should not be passed through.
             excluded_response_headers = {
                 'content-encoding',
                 'content-length',
                 'transfer-encoding',
-                'connection'
+                'connection',
             }
             response_headers = {
                 k: v for k, v in resp.headers.items() if k.lower() not in excluded_response_headers
