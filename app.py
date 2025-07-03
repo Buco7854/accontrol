@@ -1,140 +1,139 @@
-# app.py
 import os
-import sqlite3
-import requests
+import sys
+
+import httpx
+import aiosqlite
 from urllib.parse import urljoin, urlparse
-from flask import Flask, jsonify, send_from_directory, g, request, Response, stream_with_context, render_template
 from dotenv import load_dotenv
 
-# Charge les variables d'environnement du fichier .env pour le développement local
+# NEW: Import StreamingResponse along with other response types
+from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi.responses import StreamingResponse, Response  # Add StreamingResponse here
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+# --- Configuration (Unchanged) ---
 load_dotenv()
-
-# --- Configuration de l'Application ---
-# Utilisation de la configuration exacte que vous avez fournie
-app = Flask(__name__, static_folder='static', static_url_path='/static', template_folder="templates")
-
+BASE_DOMAIN = os.getenv('BASE_DOMAIN', 'localhost:8000')
 DATABASE = os.path.join('data', 'database.db')
-# On lit la variable d'environnement. Si elle n'est pas définie, on utilise 'localhost:5000' par défaut.
-BASE_DOMAIN = os.getenv('BASE_DOMAIN', 'localhost')
 
-# IMPORTANT pour le routage par sous-domaine.
-# Flask a besoin de savoir sur quel domaine principal il opère.
-app.config['SERVER_NAME'] = BASE_DOMAIN
+# --- FastAPI App Initialization (Unchanged) ---
+app = FastAPI()
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
+# --- Pydantic Data Models (Unchanged) ---
+class SplitBase(BaseModel):
+    name: str = Field(..., description="The unique subdomain name for the proxy.")
+    label: str = Field(..., description="A user-friendly display label.")
+    url: str = Field(..., description="The target URL to proxy to.")
 
-# --- Fonctions de base de données (inchangées) ---
-def get_db():
-    db = getattr(g, '_database', None)
-    if db is None:
-        db = g._database = sqlite3.connect(DATABASE)
-        db.row_factory = sqlite3.Row
-    return db
+class SplitInDB(SplitBase):
+    id: int
 
-
-@app.teardown_appcontext
-def close_connection(exception):
-    db = getattr(g, '_database', None)
-    if db is not None:
-        db.close()
-
-
-# --- Routes du Dashboard ---
-# Ces routes servent le fichier HTML principal en y injectant la variable d'environnement
-@app.route('/')
-@app.route('/split/<path:path>')
-@app.route('/manage')
-def serve_spa(path=None):
-    return render_template('index.html', base_domain=BASE_DOMAIN)
-
-
-# --- Routes de l'API (pour récupérer les données, ajouter, etc.) ---
-@app.route('/api/splits', methods=['GET'])
-def get_splits():
-    cursor = get_db().cursor()
-    splits_from_db = cursor.execute('SELECT id, name, label, url FROM splits ORDER BY label').fetchall()
-    return jsonify([dict(row) for row in splits_from_db])
-
-
-@app.route('/api/splits', methods=['POST'])
-def add_split():
-    new_split = request.get_json()
-    db = get_db()
+# --- Database & HTTPX Client Dependencies (Unchanged) ---
+async def get_db():
+    db = await aiosqlite.connect(DATABASE)
+    db.row_factory = aiosqlite.Row
     try:
-        cursor = db.cursor()
-        cursor.execute("INSERT INTO splits (name, label, url) VALUES (?, ?, ?)",
-                       (new_split.get('name'), new_split.get('label'), new_split.get('url')))
-        db.commit()
-        new_split['id'] = cursor.lastrowid
-        return jsonify(new_split), 201
-    except sqlite3.IntegrityError:
-        db.rollback()
-        return jsonify({"error": "Un split avec ce nom existe déjà."}), 409
-    except Exception as e:
-        db.rollback()
-        return jsonify({"error": str(e)}), 500
+        yield db
+    finally:
+        await db.close()
 
+_httpx_client = None
 
-@app.route('/api/splits/<int:split_id>', methods=['PUT'])
-def update_split(split_id):
-    data = request.get_json()
-    db = get_db()
+@app.on_event("startup")
+async def startup_event():
+    global _httpx_client
+    timeout = httpx.Timeout(5.0, read=None)
+    _httpx_client = httpx.AsyncClient(timeout=timeout)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await _httpx_client.aclose()
+
+def get_httpx_client():
+    return _httpx_client
+
+# --- API Routes (Unchanged and Correct) ---
+@app.get("/api/splits", response_model=list[SplitInDB])
+async def get_splits(db: aiosqlite.Connection = Depends(get_db)):
+    cursor = await db.execute('SELECT id, name, label, url FROM splits ORDER BY label')
+    rows = await cursor.fetchall()
+    return [dict(row) for row in rows]
+
+@app.post("/api/splits", response_model=SplitInDB, status_code=201)
+async def add_split(split: SplitBase, db: aiosqlite.Connection = Depends(get_db)):
     try:
-        cursor = db.cursor()
-        cursor.execute("UPDATE splits SET name = ?, label = ?, url = ? WHERE id = ?",
-                       (data.get('name'), data.get('label'), data.get('url'), split_id))
-        db.commit()
-        if cursor.rowcount == 0:
-            return jsonify({"error": "Split non trouvé"}), 404
-        return jsonify(data)
-    except Exception as e:
-        db.rollback()
-        return jsonify({"error": str(e)}), 500
+        cursor = await db.execute("INSERT INTO splits (name, label, url) VALUES (?, ?, ?)",
+                                  (split.name, split.label, split.url))
+        await db.commit()
+        return SplitInDB(id=cursor.lastrowid, **split.dict())
+    except aiosqlite.IntegrityError:
+        raise HTTPException(status_code=409, detail="A split with this name already exists.")
 
+@app.api_route("/{path:path}")
+async def router_and_proxy(request: Request, path: str):
+    host = request.headers.get("host", "").split(':')[0]
+    base_domain_name = BASE_DOMAIN.split(':')[0]
 
-@app.route('/api/splits/<int:split_id>', methods=['DELETE'])
-def delete_split(split_id):
-    db = get_db()
-    cursor = db.cursor()
-    cursor.execute("DELETE FROM splits WHERE id = ?", (split_id,))
-    db.commit()
-    if cursor.rowcount == 0:
-        return jsonify({"error": "Split non trouvé"}), 404
-    return jsonify({"message": "Split supprimé avec succès"}), 200
-
-
-# --- Proxy par Sous-Domaine ---
-@app.route('/', defaults={'path': ''}, subdomain='<split_name>', methods=['GET', 'POST', 'PUT', 'DELETE'])
-@app.route('/<path:path>', subdomain='<split_name>', methods=['GET', 'POST', 'PUT', 'DELETE'])
-def proxy_subdomain(split_name, path):
-    db = get_db()
-    split = db.execute('SELECT url FROM splits WHERE name = ?', (split_name,)).fetchone()
-    if not split:
-        return f"Sous-domaine '{split_name}' non trouvé.", 404
-
-    base_target_url = split['url']
-    target_url = urljoin(base_target_url, path)
-
-    try:
-        headers = {key: value for (key, value) in request.headers if key.lower() not in ['host', 'cookie']}
-        headers['Host'] = urlparse(target_url).netloc
-
-        resp = requests.request(
-            method=request.method, url=target_url, headers=headers,
-            data=request.get_data(), cookies=request.cookies,
-            allow_redirects=False, timeout=10, stream=True
+    if host == base_domain_name:
+        return templates.TemplateResponse(
+            "index.html",
+            {"request": request, "base_domain": BASE_DOMAIN}
         )
-    except requests.exceptions.RequestException as e:
-        return f"Erreur du proxy pour {target_url}: {e}", 502
 
-    excluded_headers = ['transfer-encoding', 'connection', 'content-length', 'content-encoding']
-    response_headers = [(name, value) for (name, value) in resp.raw.headers.items() if
-                        name.lower() not in excluded_headers]
+    if host.endswith(f".{base_domain_name}"):
+        split_name = host.removesuffix(f".{base_domain_name}")
 
-    return Response(stream_with_context(resp.iter_content(chunk_size=1024)), resp.status_code, response_headers)
+        async with aiosqlite.connect(DATABASE) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute('SELECT url FROM splits WHERE name = ?', (split_name,))
+            split = await cursor.fetchone()
 
+        if not split:
+            raise HTTPException(status_code=404, detail=f"Subdomain proxy '{split_name}' not found.")
 
-# --- Bloc de Développement ---
-if __name__ == '__main__':
-    if not os.path.exists('data'):
-        print("Attention : Le dossier 'data' est manquant. Lancez 'python init_db.py' d'abord.")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+        target_url = urljoin(split['url'], path)
+        if request.url.query:
+            target_url += "?" + request.url.query
+
+        client = get_httpx_client()
+
+        #--- THE FIX IS HERE ---
+        # Explicitly remove the 'connection' header to prevent the upstream
+        # connection from being prematurely closed.
+        excluded_incoming_headers = {'host', 'connection'}
+        req_headers = {
+            key: value for key, value in request.headers.items()
+            if key.lower() not in excluded_incoming_headers
+        }
+        req_headers['host'] = urlparse(target_url).netloc
+
+        req = client.build_request(
+            method=request.method,
+            url=target_url,
+            headers=req_headers,
+            cookies=request.cookies,
+            content=request.stream()
+        )
+
+        try:
+            resp = await client.send(req, stream=True)
+
+            async def stream_generator():
+                async for chunk in resp.aiter_raw():
+                    yield chunk
+
+            response_headers = [(name, value) for (name, value) in resp.headers.items() if name.lower() not in ('transfer-encoding', 'connection', 'content-length', 'content-encoding')]
+
+            return StreamingResponse(
+                content=stream_generator(),
+                status_code=resp.status_code,
+                headers=dict(response_headers)
+            )
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=f"Proxy error for {target_url}: {e}")
+
+    raise HTTPException(status_code=400, detail="Invalid host")

@@ -1,4 +1,9 @@
-Flask
-gunicorn
 python-dotenv
 requests
+httpx
+aiosqlite
+fastapi
+pydantic
+uvicorn
+gunicorn
+jinja2
