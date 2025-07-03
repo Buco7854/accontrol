@@ -1,6 +1,7 @@
 import os
 import asyncio
 from contextlib import asynccontextmanager
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import aiosqlite
@@ -28,6 +29,8 @@ ALLOWED_HEADERS = {
     "pragma",
     "upgrade-insecure-requests",
     "user-agent",
+    "content-length",
+    "connection",
 }
 
 
@@ -174,13 +177,16 @@ async def router_and_proxy(
 
         headers_to_forward['host'] = urlparse(target_base_url).netloc
 
+        body_stream: Any | None = None
+        if request.method in {"POST", "PUT", "PATCH"} and request.headers.get("content-length", "0") != "0":
+            body_stream = request.stream()  # keep streaming for big uploads
+
         req = client.build_request(
             method=request.method,
             url=target_url,
             headers=headers_to_forward,
-            content=request.stream()
+            content=body_stream  # None for GET/HEAD ⇒ no chunked TE
         )
-
         try:
             resp = await client.send(req, stream=True)
 
